@@ -170,7 +170,6 @@ const SOURCE_LABELS: Record<string, string> = {
   'lec-oj-judge': '判题评测机',
   'lec-sso': '统一身份',
   'lec-website': '乐程官网',
-  'lec-blog': '乐程博客',
   'lec-orbit-server': 'Orbit 服务端',
   orbit: 'Orbit 伴程',
   'lec-orbit': 'Orbit 伴程',
@@ -180,9 +179,6 @@ function resolveSourceVisual(sourceApp: string): { icon: ReactNode; accentClass:
   const s = sourceApp.trim().toLowerCase();
   if (s === 'lec-website' || s.includes('website')) {
     return { icon: <Globe size={14} />, accentClass: 'iconWebsite' };
-  }
-  if (s === 'lec-blog' || s.includes('blog')) {
-    return { icon: <FileText size={14} />, accentClass: 'iconBlog' };
   }
   const chMeta = APP_CHANNELS.find((c) => c.id === normalizeSourceChannel(sourceApp));
   return {

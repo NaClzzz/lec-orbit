@@ -18,12 +18,14 @@ import {
   Trash2,
   Upload,
 } from '@lec-space/icons';
-import { Camera, KeyRound } from 'lucide-react';
+import { Camera, KeyRound, Sparkles } from 'lucide-react';
 import { getOrbitEndpoints } from '@shared/env';
 import type { ThemePreference } from '@shared/ipc';
+import { UpdateChangelogDialog } from '@/components/UpdateChangelogDialog';
 import { getOrbitClient } from '@/services/orbitClient';
 import { notifyToast } from '@/services/orbitToast';
 import { useOrbitStore } from '@/stores/useOrbitStore';
+import { SocialBindingsCard } from './SocialBindingsCard';
 import { WifiFingerprintCard } from './WifiFingerprintCard';
 import styles from './Settings.module.css';
 
@@ -37,6 +39,7 @@ export function SettingsPage(): JSX.Element {
   const updateInfo = useOrbitStore((s) => s.updateInfo);
   const setUpdateInfo = useOrbitStore((s) => s.setUpdateInfo);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [changelogDialogOpen, setChangelogDialogOpen] = useState(false);
 
   // 更换头像弹窗状态
   const [avatarDialogOpen, setAvatarDialogOpen] = useState(false);
@@ -285,6 +288,8 @@ export function SettingsPage(): JSX.Element {
         </div>
       </Card>
 
+      {auth.authenticated && <SocialBindingsCard />}
+
       <Card title="外观与桌面行为">
         <div className={styles.settingList}>
           <div className={styles.settingRow}>
@@ -354,6 +359,14 @@ export function SettingsPage(): JSX.Element {
             <Button
               variant="glass"
               size="small"
+              icon={<Sparkles size={14} />}
+              onClick={() => setChangelogDialogOpen(true)}
+            >
+              {updateInfo?.available ? `v${updateInfo.latestVersion} 改了啥` : '本版更新日志'}
+            </Button>
+            <Button
+              variant="glass"
+              size="small"
               icon={<Trash2 size={14} />}
               onClick={() => void handleClearCache()}
             >
@@ -395,6 +408,23 @@ export function SettingsPage(): JSX.Element {
           </div>
         </div>
       </Card>
+
+      <UpdateChangelogDialog
+        open={changelogDialogOpen}
+        onOpenChange={setChangelogDialogOpen}
+        mode={updateInfo?.available ? 'update' : 'history'}
+        version={
+          updateInfo?.available && updateInfo.latestVersion
+            ? updateInfo.latestVersion
+            : (updateInfo?.currentVersion ?? '0.2.0')
+        }
+        previousVersion={updateInfo?.available ? updateInfo.currentVersion : undefined}
+        publishedAt={updateInfo?.publishedAt}
+        releaseUrl={updateInfo?.releaseUrl}
+        rawNotes={updateInfo?.releaseNotes}
+        changelog={updateInfo?.available ? updateInfo.changelog : undefined}
+        updateInfo={updateInfo?.available ? updateInfo : undefined}
+      />
 
       <Dialog
         open={avatarDialogOpen}

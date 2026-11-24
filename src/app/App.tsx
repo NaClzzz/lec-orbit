@@ -5,8 +5,6 @@ import {
   Badge,
   Button,
   ConfigProvider,
-  Dialog,
-  Message,
   Tag,
   ToastProvider,
   useToast,
@@ -18,7 +16,6 @@ import {
   CalendarDays,
   Clock3,
   Download,
-  ExternalLink,
   LogOut,
   Settings,
   Users,
@@ -26,6 +23,8 @@ import {
 import { Compass, Gamepad2, Rss, Sparkles, X } from 'lucide-react';
 import { formatReadableDuration, getCurrentIsoWeek } from '@shared/punch';
 import { evaluateFocusReminder } from '@shared/reminders';
+import { compareOrbitSemver } from '@shared/updateChangelog';
+import { UpdateChangelogDialog } from '@/components/UpdateChangelogDialog';
 import { getOrbitClient } from '@/services/orbitClient';
 import { connectOrbitWebSocket } from '@/services/orbitServerApi';
 import { notifyToast, registerOrbitToast } from '@/services/orbitToast';
@@ -99,11 +98,18 @@ export function App(): JSX.Element {
   const toggleCheckInOut = useOrbitStore((s) => s.toggleCheckInOut);
   const applyOrbitWsEvent = useOrbitStore((s) => s.applyOrbitWsEvent);
   const syncStaleData = useOrbitStore((s) => s.syncStaleData);
+  const updateConfig = useOrbitStore((s) => s.updateConfig);
 
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [whatsNewState, setWhatsNewState] = useState<{
+    open: boolean;
+    version: string;
+    previousVersion?: string;
+  } | null>(null);
   const profileAreaRef = useRef<HTMLDivElement | null>(null);
   const notifiedVersionRef = useRef<string | null>(null);
+  const whatsNewCheckedRef = useRef(false);
 
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false,
@@ -143,10 +149,16 @@ export function App(): JSX.Element {
         notifiedVersionRef.current !== info.latestVersion
       ) {
         notifiedVersionRef.current = info.latestVersion;
+        const changeCount = info.changelog?.items.length ?? 0;
+        const contribCount = info.changelog?.contributors.length ?? 0;
+        const summaryHint =
+          changeCount > 0
+            ? `包含 ${changeCount} 项改动${contribCount > 0 ? `（${contribCount} 位成员参与）` : ''}，点击查看更新详情与修复成员。`
+            : '包含最新功能与内置 LecDoc 更新，点击查看详情并应用内下载。';
         notifyToast({
           tone: 'info',
           title: `发现 Orbit 新版本 v${info.latestVersion}`,
-          description: '包含最新功能与内置 LecDoc 更新，点击查看详情并应用内下载。',
+          description: summaryHint,
           action: {
             label: '查看更新',
             onClick: () => setUpdateDialogOpen(true),
@@ -190,10 +202,32 @@ export function App(): JSX.Element {
   ]);
 
   useEffect(() => {
-    if (!updateDialogOpen) return;
+    if (!updateDialogOpen && !whatsNewState?.open) return;
     pushOverlay();
     return () => popOverlay();
-  }, [updateDialogOpen, pushOverlay, popOverlay]);
+  }, [updateDialogOpen, whatsNewState?.open, pushOverlay, popOverlay]);
+
+  // 升级后首次启动自动弹出「本次更新了什么 / 都是谁修的」弹窗，关闭后记录 lastSeenAppVersion
+  useEffect(() => {
+    if (isAuxiliaryWindow || !ready || whatsNewCheckedRef.current) return;
+    const currentVersion = updateInfo?.currentVersion?.trim();
+    if (!currentVersion) return;
+    whatsNewCheckedRef.current = true;
+
+    const lastSeen = config.lastSeenAppVersion?.trim();
+    if (!lastSeen) {
+      // 首次引入版本追踪基线：静默记录当前版本，避免老用户未升级却误弹
+      void updateConfig({ lastSeenAppVersion: currentVersion });
+      return;
+    }
+    if (compareOrbitSemver(currentVersion, lastSeen) > 0) {
+      setWhatsNewState({
+        open: true,
+        version: currentVersion,
+        previousVersion: lastSeen,
+      });
+    }
+  }, [isAuxiliaryWindow, ready, updateInfo?.currentVersion, config.lastSeenAppVersion, updateConfig]);
 
   // 个人信息卡弹层打开时自动避让内嵌视图，点击外部或按 Esc 自动关闭
   useEffect(() => {
@@ -560,14 +594,23 @@ export function App(): JSX.Element {
 
                   <div className={styles.updateCardActions}>
                     {updateInfo.stage === 'downloaded' ? (
-                      <Button
-                        variant="filled"
-                        size="small"
-                        className={styles.updatePrimaryBtn}
-                        onClick={() => void getOrbitClient().system.installUpdate()}
-                      >
-                        {updateInfo.canAutoInstall ? '重启以更新' : '打开安装包'}
-                      </Button>
+                      <>
+                        <Button
+                          variant="filled"
+                          size="small"
+                          className={styles.updatePrimaryBtn}
+                          onClick={() => void getOrbitClient().system.installUpdate()}
+                        >
+                          {updateInfo.canAutoInstall ? '重启以更新' : '打开安装包'}
+                        </Button>
+                        <Button
+                          variant="glass"
+                          size="small"
+                          onClick={() => setUpdateDialogOpen(true)}
+                        >
+                          改了啥
+                        </Button>
+                      </>
                     ) : updateInfo.stage === 'downloading' ? (
                       <span className={styles.updatePctText}>
                         {(updateInfo.progressPercent ?? 0) >= 95 && updateInfo.canAutoInstall
@@ -590,7 +633,7 @@ export function App(): JSX.Element {
                           size="small"
                           onClick={() => setUpdateDialogOpen(true)}
                         >
-                          详情
+                          改了啥
                         </Button>
                       </>
                     )}
@@ -628,92 +671,35 @@ export function App(): JSX.Element {
             })()}
           </div>
 
-          <Dialog
+          {/* 更新前弹窗：展示新版本改动明细、参与修复的 @成员 与一键下载/重启更新 */}
+          <UpdateChangelogDialog
             open={updateDialogOpen}
             onOpenChange={setUpdateDialogOpen}
-            size="regular"
-            title={
-              updateInfo?.latestVersion
-                ? `发现 Orbit 新版本 v${updateInfo.latestVersion}`
-                : 'Orbit 版本更新'
-            }
-            description={`当前版本 v${updateInfo?.currentVersion ?? '0.1.0'}${
-              updateInfo?.publishedAt
-                ? ` · 发布于 ${new Date(updateInfo.publishedAt).toLocaleDateString('zh-CN')}`
-                : ''
-            }`}
-          >
-            <div className={styles.updateDialogBody}>
-              <div className={styles.updateNotesBox}>
-                {updateInfo?.releaseNotes
-                  ? updateInfo.releaseNotes
-                  : '本次更新包含功能优化与最新内置 LecDoc 前端版本。'}
-              </div>
+            mode="update"
+            version={updateInfo?.latestVersion ?? updateInfo?.currentVersion ?? '0.2.0'}
+            previousVersion={updateInfo?.currentVersion}
+            publishedAt={updateInfo?.publishedAt}
+            releaseUrl={updateInfo?.releaseUrl}
+            rawNotes={updateInfo?.releaseNotes}
+            changelog={updateInfo?.changelog}
+            updateInfo={updateInfo}
+          />
 
-              {updateInfo?.stage === 'downloading' && (
-                <div className={styles.updateDialogProgress}>
-                  <div className={styles.updateProgressTrack}>
-                    <div
-                      className={styles.updateProgressFill}
-                      style={{ width: `${updateInfo.progressPercent ?? 0}%` }}
-                    />
-                  </div>
-                  <span className={styles.updatePctText}>
-                    {(updateInfo.progressPercent ?? 0) >= 95 && updateInfo.canAutoInstall
-                      ? '下载完成，正在校验并解压更新包…'
-                      : `应用内下载中 ${updateInfo.progressPercent ?? 0}%${
-                          updateInfo.assetName ? `（${updateInfo.assetName}）` : ''
-                        }`}
-                  </span>
-                </div>
-              )}
-
-              {updateInfo?.stage === 'error' && updateInfo.errorMessage && (
-                <Message tone="error">{updateInfo.errorMessage}</Message>
-              )}
-
-              <div className={styles.updateDialogFooter}>
-                {updateInfo?.releaseUrl && (
-                  <Button
-                    variant="glass"
-                    size="small"
-                    icon={<ExternalLink size={14} />}
-                    onClick={() => void getOrbitClient().system.openExternal(updateInfo.releaseUrl!)}
-                  >
-                    GitHub 发布页
-                  </Button>
-                )}
-                <div className={styles.updateDialogFooterRight}>
-                  <Button variant="glass" size="small" onClick={() => setUpdateDialogOpen(false)}>
-                    稍后
-                  </Button>
-                  {updateInfo?.stage === 'downloaded' ? (
-                    <Button
-                      variant="filled"
-                      size="small"
-                      onClick={() => void getOrbitClient().system.installUpdate()}
-                    >
-                      {updateInfo.canAutoInstall ? '重启以更新' : '打开安装包'}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="filled"
-                      size="small"
-                      icon={<Download size={14} />}
-                      loading={updateInfo?.stage === 'downloading'}
-                      onClick={() => void getOrbitClient().system.downloadUpdate()}
-                    >
-                      {updateInfo?.stage === 'downloading'
-                        ? (updateInfo.progressPercent ?? 0) >= 95 && updateInfo.canAutoInstall
-                          ? '正在准备更新包…'
-                          : `下载中 ${updateInfo.progressPercent ?? 0}%`
-                        : '应用内下载更新'}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </Dialog>
+          {/* 更新后首次启动自动弹窗（What's New）：展示本次改了啥、都是谁修的 */}
+          {whatsNewState && (
+            <UpdateChangelogDialog
+              open={whatsNewState.open}
+              onOpenChange={(nextOpen) => {
+                setWhatsNewState((prev) => (prev ? { ...prev, open: nextOpen } : null));
+                if (!nextOpen) {
+                  void updateConfig({ lastSeenAppVersion: whatsNewState.version });
+                }
+              }}
+              mode="whats-new"
+              version={whatsNewState.version}
+              previousVersion={whatsNewState.previousVersion}
+            />
+          )}
 
           <LoginModal open={loginModalOpen} onOpenChange={setLoginModalOpen} />
         </div>
