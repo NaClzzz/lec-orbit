@@ -1055,30 +1055,17 @@ func (s *Server) handleDevtronWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Webhook 负载无效"})
 		return
 	}
-	appName, _ := raw["appName"].(string)
-	if appName == "" {
-		if p, ok := raw["payload"].(map[string]any); ok {
-			appName, _ = p["appName"].(string)
-		}
-	}
-	if appName == "" {
-		appName = "studio-app"
-	}
-	version, _ := raw["version"].(string)
-	summary, _ := raw["summary"].(string)
-	if summary == "" {
-		summary, _ = raw["message"].(string)
-	}
-	if summary == "" {
-		summary = fmt.Sprintf("%s 已完成新一轮校园生产环境发布上线。", appName)
-	}
-	title := fmt.Sprintf("%s 已发布更新", appName)
-	if version != "" {
-		title = fmt.Sprintf("%s 已更新至 %s", appName, version)
-	}
 	ctx := c.Request.Context()
+	meta, summary := buildReleaseMeta(ctx, raw)
+	// 将结构化 release 元信息附加回 payload，保留原始 Devtron 字段便于排障与客户端展示详情
+	raw["release"] = meta
+
+	title := fmt.Sprintf("%s 已发布更新", meta.AppName)
+	if meta.Version != "" {
+		title = fmt.Sprintf("%s 已更新至 %s", meta.AppName, meta.Version)
+	}
 	notif, err := s.insertNotification(ctx, createNotifInput{
-		SourceApp: appName,
+		SourceApp: meta.AppName,
 		EventType: "app.updated",
 		Title:     title,
 		Body:      summary,

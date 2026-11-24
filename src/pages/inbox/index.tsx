@@ -15,12 +15,20 @@ import {
 } from '@lec-space/liquidglass';
 import { BookOpen, Check, Clock3, Trash2 } from '@lec-space/icons';
 import {
+  ArrowRight,
+  ArrowUpRight,
   BellRing,
   Bold,
   CheckCheck,
+  ChevronRight,
   Code,
   Code2,
+  ExternalLink,
   Eye,
+  FileText,
+  GitCommitHorizontal,
+  GitCompareArrows,
+  Globe,
   HardDrive,
   Heading2,
   ImagePlus,
@@ -34,12 +42,17 @@ import {
   Pin,
   Plus,
   Quote,
+  Rocket,
   Rss,
   ShieldCheck,
   Underline,
+  Users,
   X,
 } from 'lucide-react';
 import { parseBlogUrl } from '@shared/blogUrl';
+import { MemberMention, MemberMentionList, type MemberMentionHint } from '@/components/MemberMention';
+import { MemberProfileDialog, type MemberProfileSeed } from '@/components/MemberProfileDialog';
+import { getOrbitClient } from '@/services/orbitClient';
 import {
   orbitServerApi,
   type OrbitAnnouncement,
@@ -48,6 +61,7 @@ import {
 } from '@/services/orbitServerApi';
 import { notifyToast } from '@/services/orbitToast';
 import { useOrbitStore } from '@/stores/useOrbitStore';
+import { getKnownAppDisplayName, parseNotificationReleaseDetail } from './releaseMeta';
 import styles from './Inbox.module.css';
 
 type ChannelKey =
@@ -155,9 +169,27 @@ const SOURCE_LABELS: Record<string, string> = {
   'lec-oj': '在线判题',
   'lec-oj-judge': '判题评测机',
   'lec-sso': '统一身份',
+  'lec-website': '乐程官网',
+  'lec-blog': '乐程博客',
+  'lec-orbit-server': 'Orbit 服务端',
   orbit: 'Orbit 伴程',
   'lec-orbit': 'Orbit 伴程',
 };
+
+function resolveSourceVisual(sourceApp: string): { icon: ReactNode; accentClass: string } {
+  const s = sourceApp.trim().toLowerCase();
+  if (s === 'lec-website' || s.includes('website')) {
+    return { icon: <Globe size={14} />, accentClass: 'iconWebsite' };
+  }
+  if (s === 'lec-blog' || s.includes('blog')) {
+    return { icon: <FileText size={14} />, accentClass: 'iconBlog' };
+  }
+  const chMeta = APP_CHANNELS.find((c) => c.id === normalizeSourceChannel(sourceApp));
+  return {
+    icon: chMeta?.icon ?? <Inbox size={13} />,
+    accentClass: chMeta?.accentClass ?? 'iconAll',
+  };
+}
 
 function normalizeSourceChannel(sourceApp: string): ChannelKey {
   const s = sourceApp.trim().toLowerCase();
@@ -183,15 +215,22 @@ export function InboxPage(): JSX.Element {
   const orbitAnnouncements = useOrbitStore((s) => s.orbitAnnouncements);
   const orbitNotifications = useOrbitStore((s) => s.orbitNotifications);
   const refreshOrbitCenter = useOrbitStore((s) => s.refreshOrbitCenter);
+  const studioMembers = useOrbitStore((s) => s.studioMembers);
+  const refreshStudioMembers = useOrbitStore((s) => s.refreshStudioMembers);
   const setActiveTab = useOrbitStore((s) => s.setActiveTab);
   const openBlogTarget = useOrbitStore((s) => s.openBlogTarget);
 
   const [activeChannel, setActiveChannel] = useState<ChannelKey>('ALL');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
+  const [profileSeed, setProfileSeed] = useState<MemberProfileSeed | null>(null);
 
   // 公告详情弹窗（打开后自动触发 IM 已读回执）
   const [viewingAnn, setViewingAnn] = useState<OrbitAnnouncement | null>(null);
+  // 通知 / 发布更新详情弹窗（点击任意消息卡片打开）
+  const [viewingNotif, setViewingNotif] = useState<(OrbitNotificationItem & { legacyPunch?: boolean }) | null>(
+    null,
+  );
 
   // IM 全员已读/未读名单弹窗（所有成员可见）
   const [receiptsOpen, setReceiptsOpen] = useState(false);
@@ -213,7 +252,10 @@ export function InboxPage(): JSX.Element {
 
   useEffect(() => {
     void refreshOrbitCenter();
-  }, [refreshOrbitCenter]);
+    if (studioMembers.length === 0) {
+      void refreshStudioMembers();
+    }
+  }, [refreshOrbitCenter, refreshStudioMembers, studioMembers.length]);
 
   // 成员打开公告详情后自动记录已读回执（幂等 + WS 实时广播全员刷新计数）
   useEffect(() => {
@@ -621,8 +663,12 @@ export function InboxPage(): JSX.Element {
 
                     <div className={styles.annFooter}>
                       <div className={styles.annAuthor}>
-                        <Avatar src={ann.authorAvatar} name={ann.authorName || '队长'} size="small" />
-                        <span>{ann.authorName || '队长'}</span>
+                        <MemberMention
+                          size="small"
+                          name={ann.authorName || '队长'}
+                          avatar={ann.authorAvatar}
+                          onSelectMember={setProfileSeed}
+                        />
                         <span className={styles.dotSep}>·</span>
                         <span>{new Date(ann.createdAt).toLocaleString('zh-CN')}</span>
                       </div>
@@ -685,18 +731,66 @@ export function InboxPage(): JSX.Element {
                     typeof item.payload?.pageUrl === 'string' ? item.payload.pageUrl : undefined;
                   const blogUrl = item.sourceApp === 'lec-blog' ? parseBlogUrl(item.payload?.postUrl) : null;
                   const authorId = typeof item.payload?.userId === 'string' ? item.payload.userId : '';
-                  const chMeta = APP_CHANNELS.find(
-                    (c) => c.id === normalizeSourceChannel(item.sourceApp),
-                  );
+                  const visual = resolveSourceVisual(item.sourceApp);
+                  const release = parseNotificationReleaseDetail(item, orbitNotifications);
+                  const displayBody = release.commitTitle || item.body;
+                  const requesterName =
+                    typeof item.payload?.requesterName === 'string'
+                      ? item.payload.requesterName
+                      : undefined;
+                  const requesterUsername =
+                    typeof item.payload?.requesterUsername === 'string'
+                      ? item.payload.requesterUsername
+                      : undefined;
+                  const inlineMentions: MemberMentionHint[] = [];
+                  if (release.proposer) {
+                    inlineMentions.push({
+                      githubLogin: release.proposer.githubLogin,
+                      handle: release.proposer.handle,
+                      name: release.proposer.name,
+                      avatar: release.proposer.avatar,
+                      roleLabel: release.proposer.roleLabel ?? '需求',
+                    });
+                  }
+                  for (const c of release.contributors) {
+                    inlineMentions.push({
+                      githubLogin: c.githubLogin,
+                      handle: c.handle,
+                      name: c.name,
+                      avatar: c.avatar,
+                      roleLabel: c.roleLabel,
+                    });
+                  }
+                  if (inlineMentions.length === 0 && (requesterName || requesterUsername)) {
+                    inlineMentions.push({
+                      handle: requesterUsername,
+                      name: requesterName,
+                      roleLabel: '申请人',
+                    });
+                  }
+
+                  const openNotifDetail = () => {
+                    setViewingNotif(item);
+                    if (!item.isRead && !item.legacyPunch && (!isDocRequest || item.actionStatus !== 'pending')) {
+                      void handleMarkOrbitNotifRead(item.id);
+                    }
+                  };
                   return (
                     <li key={item.id} className={styles.item}>
-                      <div className={styles.itemLeft}>
-                        <span
-                          className={`${styles.appIcon} ${styles.appIconSm} ${
-                            styles[chMeta?.accentClass ?? 'iconAll']
-                          }`}
-                        >
-                          {chMeta?.icon ?? <Inbox size={13} />}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className={styles.itemClickable}
+                        onClick={openNotifDetail}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            openNotifDetail();
+                          }
+                        }}
+                      >
+                        <span className={`${styles.appIcon} ${styles.appIconSm} ${styles[visual.accentClass]}`}>
+                          {visual.icon}
                         </span>
                         <div className={styles.itemMain}>
                           <div className={styles.itemHead}>
@@ -704,14 +798,32 @@ export function InboxPage(): JSX.Element {
                             {activeChannel === 'ALL' && (
                               <Tag tone="info">{sourceTagLabel(item.sourceApp)}</Tag>
                             )}
+                            {release.isRelease && release.shortSha && (
+                              <span className={styles.shaPill}>{release.shortSha}</span>
+                            )}
                             {!item.isRead && <span className={styles.unreadDot} title="未读" />}
                             {item.actionStatus === 'approved' && <Tag tone="success">已同意</Tag>}
                             {item.actionStatus === 'denied' && <Tag tone="danger">已拒绝</Tag>}
                           </div>
-                          <p className={styles.itemBody}>{item.body}</p>
-                          <span className={styles.itemTime}>
-                            {new Date(item.createdAt).toLocaleString('zh-CN')}
-                          </span>
+                          <p className={styles.itemBody}>{displayBody}</p>
+                          <div className={styles.itemMetaRow}>
+                            <span className={styles.itemTime}>
+                              {new Date(item.createdAt).toLocaleString('zh-CN')}
+                            </span>
+                            {release.isRelease && release.previousShortSha && release.shortSha && (
+                              <span className={styles.itemDiffHint}>
+                                {release.previousShortSha} → {release.shortSha}
+                              </span>
+                            )}
+                            {inlineMentions.length > 0 && (
+                              <MemberMentionList
+                                size="small"
+                                maxVisible={3}
+                                hints={inlineMentions}
+                                onSelectMember={setProfileSeed}
+                              />
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -751,9 +863,23 @@ export function InboxPage(): JSX.Element {
                           </Button>
                         )}
                         {blogUrl && authorId.trim() && (
-                          <Button variant="glass" size="small" icon={<BookOpen size={14} />}
-                            onClick={() => openBlogTarget(authorId, blogUrl.href)}>
+                          <Button
+                            variant="glass"
+                            size="small"
+                            icon={<BookOpen size={14} />}
+                            onClick={() => openBlogTarget(authorId, blogUrl.href)}
+                          >
                             前往阅读
+                          </Button>
+                        )}
+                        {release.isRelease && (
+                          <Button
+                            variant="glass"
+                            size="small"
+                            icon={<ChevronRight size={13} />}
+                            onClick={openNotifDetail}
+                          >
+                            查看更新
                           </Button>
                         )}
                         {!item.isRead && (!isDocRequest || item.actionStatus !== 'pending') && (
@@ -782,6 +908,297 @@ export function InboxPage(): JSX.Element {
           )}
         </div>
       </section>
+
+      {/* 通知 / 发布更新详情弹窗 */}
+      {(() => {
+        const detail = viewingNotif
+          ? parseNotificationReleaseDetail(viewingNotif, orbitNotifications)
+          : null;
+        const visual = viewingNotif ? resolveSourceVisual(viewingNotif.sourceApp) : null;
+        return (
+          <Dialog
+            open={Boolean(viewingNotif && detail)}
+            onOpenChange={(open) => !open && setViewingNotif(null)}
+            size="regular"
+            title={
+              viewingNotif && detail ? (
+                <span className={styles.detailTitleWrap}>
+                  {visual && (
+                    <span className={`${styles.appIcon} ${styles.appIconSm} ${styles[visual.accentClass]}`}>
+                      {visual.icon}
+                    </span>
+                  )}
+                  <span>{detail.isRelease ? `${getKnownAppDisplayName(detail.appName)} 发布详情` : viewingNotif.title}</span>
+                </span>
+              ) : (
+                '消息详情'
+              )
+            }
+            description={
+              viewingNotif
+                ? `${sourceTagLabel(viewingNotif.sourceApp)} · ${new Date(viewingNotif.createdAt).toLocaleString('zh-CN')}`
+                : undefined
+            }
+            footer={
+              <div className={styles.detailFooter}>
+                <Button variant="filled" size="small" onClick={() => setViewingNotif(null)}>
+                  关闭
+                </Button>
+              </div>
+            }
+          >
+            {viewingNotif && detail && (
+              <div className={styles.detailBody}>
+                {detail.isRelease ? (
+                  <>
+                    <div className={styles.releaseHero}>
+                      <div className={styles.releaseHeroTop}>
+                        <div className={styles.releaseTitle}>{viewingNotif.title}</div>
+                        <Tag tone="success">
+                          <Rocket size={11} style={{ marginRight: 3 }} />
+                          {detail.environment}
+                        </Tag>
+                      </div>
+
+                      {detail.shortSha && (
+                        <div className={styles.versionFlowRow}>
+                          {detail.previousShortSha ? (
+                            <>
+                              <span className={styles.shaChipMuted}>{detail.previousShortSha}</span>
+                              <ArrowRight size={13} className={styles.flowArrow} />
+                              <span className={styles.shaChipActive}>{detail.shortSha}</span>
+                            </>
+                          ) : (
+                            <span className={styles.shaChipActive}>Commit {detail.shortSha}</span>
+                          )}
+                          {detail.buildNumber && (
+                            <Tag tone="neutral">构建 #{detail.buildNumber}</Tag>
+                          )}
+                          {(detail.authorLogin || detail.author) && (
+                            <MemberMention
+                              size="small"
+                              githubLogin={detail.authorLogin}
+                              name={detail.author}
+                              avatar={detail.authorAvatar}
+                              roleLabel="主提交"
+                              onSelectMember={setProfileSeed}
+                            />
+                          )}
+                          {typeof detail.filesChanged === 'number' && detail.filesChanged > 0 && (
+                            <span className={styles.diffStatText}>
+                              改动 {detail.filesChanged} 个文件
+                              {typeof detail.additions === 'number' && (
+                                <span className={styles.diffAdd}> +{detail.additions}</span>
+                              )}
+                              {typeof detail.deletions === 'number' && (
+                                <span className={styles.diffDel}> -{detail.deletions}</span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {(detail.proposer || detail.contributors.length > 0) && (
+                      <div className={styles.detailSection}>
+                        <div className={styles.detailSectionTitle}>
+                          <Users size={14} /> 参与成员与贡献者
+                        </div>
+                        <div className={styles.contributorBox}>
+                          <MemberMentionList
+                            size="regular"
+                            maxVisible={12}
+                            hints={[
+                              ...(detail.proposer
+                                ? [
+                                    {
+                                      githubLogin: detail.proposer.githubLogin,
+                                      handle: detail.proposer.handle,
+                                      name: detail.proposer.name,
+                                      avatar: detail.proposer.avatar,
+                                      roleLabel: detail.proposer.roleLabel ?? '需求提出',
+                                    },
+                                  ]
+                                : []),
+                              ...detail.contributors.map((c) => ({
+                                githubLogin: c.githubLogin,
+                                handle: c.handle,
+                                name: c.name,
+                                avatar: c.avatar,
+                                roleLabel:
+                                  c.roleLabel ??
+                                  (c.commits && c.commits > 1 ? `${c.commits} 次提交` : '代码贡献'),
+                              })),
+                            ]}
+                            onSelectMember={setProfileSeed}
+                          />
+                          <span className={styles.contributorHint}>
+                            已按 LecSSO 绑定的 GitHub 账号自动关联工作室成员，点击可查看个人名片
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className={styles.detailSection}>
+                      <div className={styles.detailSectionTitle}>
+                        <GitCommitHorizontal size={14} /> 更新内容
+                      </div>
+                      {detail.commits.length > 0 ? (
+                        <ul className={styles.commitList}>
+                          {detail.commits.map((c, idx) => (
+                            <li key={`${c.sha || idx}`} className={styles.commitItem}>
+                              <div className={styles.commitHead}>
+                                {c.shortSha && <span className={styles.shaPill}>{c.shortSha}</span>}
+                                <span className={styles.commitMsg}>{c.message.split('\n')[0]}</span>
+                                {c.url && (
+                                  <button
+                                    type="button"
+                                    className={styles.commitLinkBtn}
+                                    onClick={() => void getOrbitClient().system.openExternal(c.url!)}
+                                  >
+                                    查看 <ArrowUpRight size={12} />
+                                  </button>
+                                )}
+                              </div>
+                              {(c.authorLogin || c.author || c.committedAt) && (
+                                <div className={styles.commitSub}>
+                                  {(c.authorLogin || c.author) && (
+                                    <MemberMention
+                                      size="small"
+                                      githubLogin={c.authorLogin}
+                                      name={c.author}
+                                      avatar={c.authorAvatar}
+                                      onSelectMember={setProfileSeed}
+                                    />
+                                  )}
+                                  {c.committedAt && (
+                                    <span>{new Date(c.committedAt).toLocaleString('zh-CN')}</span>
+                                  )}
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : detail.commitTitle ? (
+                        <div className={styles.changelogBox}>
+                          <div className={styles.changelogTitle}>{detail.commitTitle}</div>
+                          {detail.commitBody && (
+                            <pre className={styles.changelogPre}>{detail.commitBody}</pre>
+                          )}
+                        </div>
+                      ) : (
+                        <div className={styles.changelogEmpty}>
+                          <p>{viewingNotif.body}</p>
+                          <span>
+                            该次历史发布未附带提交正文，点击下方「查看本次 Commit」或「对比版本 Diff」可在 GitHub 查看完整代码改动与提交说明。
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={styles.detailMetaGrid}>
+                      <div className={styles.metaCell}>
+                        <span>应用标识</span>
+                        <strong>{detail.appName}</strong>
+                      </div>
+                      {detail.version && (
+                        <div className={styles.metaCell}>
+                          <span>镜像版本</span>
+                          <strong className={styles.monoText}>{detail.version}</strong>
+                        </div>
+                      )}
+                      {detail.repo && (
+                        <div className={styles.metaCell}>
+                          <span>代码仓库</span>
+                          <strong className={styles.monoText}>{detail.repo}</strong>
+                        </div>
+                      )}
+                      {detail.triggeredBy && (
+                        <div className={styles.metaCell}>
+                          <span>触发方式</span>
+                          <strong>{detail.triggeredBy}</strong>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={styles.detailActionBar}>
+                      {detail.inAppTab && (
+                        <Button
+                          variant="filled"
+                          size="small"
+                          onClick={() => {
+                            const tab = detail.inAppTab!;
+                            setViewingNotif(null);
+                            setActiveTab(tab);
+                          }}
+                        >
+                          在 Orbit 内打开
+                        </Button>
+                      )}
+                      {detail.appUrl && (
+                        <Button
+                          variant={detail.inAppTab ? 'glass' : 'filled'}
+                          size="small"
+                          icon={<ExternalLink size={13} />}
+                          onClick={() => void getOrbitClient().system.openExternal(detail.appUrl!)}
+                        >
+                          访问线上应用
+                        </Button>
+                      )}
+                      {detail.compareUrl && (
+                        <Button
+                          variant="glass"
+                          size="small"
+                          icon={<GitCompareArrows size={13} />}
+                          onClick={() => void getOrbitClient().system.openExternal(detail.compareUrl!)}
+                        >
+                          对比版本 Diff
+                        </Button>
+                      )}
+                      {detail.commitUrl && (
+                        <Button
+                          variant="glass"
+                          size="small"
+                          icon={<GitCommitHorizontal size={13} />}
+                          onClick={() => void getOrbitClient().system.openExternal(detail.commitUrl!)}
+                        >
+                          查看本次 Commit
+                        </Button>
+                      )}
+                      {detail.devtronUrl && (
+                        <Button
+                          variant="glass"
+                          size="small"
+                          icon={<ArrowUpRight size={13} />}
+                          onClick={() => void getOrbitClient().system.openExternal(detail.devtronUrl!)}
+                        >
+                          Devtron 控制台
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className={styles.changelogBox}>
+                    <div className={styles.changelogTitle}>{viewingNotif.title}</div>
+                    <p className={styles.itemBody} style={{ marginTop: 6 }}>
+                      {viewingNotif.body}
+                    </p>
+                  </div>
+                )}
+
+                {viewingNotif.payload && Object.keys(viewingNotif.payload).length > 0 && (
+                  <details className={styles.rawPayloadDetails}>
+                    <summary>查看原始推送数据（开发者排障）</summary>
+                    <pre className={styles.rawPayloadPre}>
+                      {JSON.stringify(viewingNotif.payload, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+          </Dialog>
+        );
+      })()}
 
       {/* 公告阅读全文弹窗 */}
       <Dialog
@@ -991,6 +1408,9 @@ export function InboxPage(): JSX.Element {
           </div>
         </div>
       </Dialog>
+
+      {/* 工作室成员个人名片弹窗（点击任意 @成员 胶囊弹出） */}
+      <MemberProfileDialog seed={profileSeed} onClose={() => setProfileSeed(null)} />
     </div>
   );
 }
