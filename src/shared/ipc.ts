@@ -12,6 +12,9 @@ import type {
   OrbitAppManifest,
   RunningMiniAppState,
 } from './miniapp';
+import type { UpdateChangelog } from './updateChangelog';
+
+export type { UpdateChangelog };
 
 export const ThemePreferenceSchema = z.enum(['system', 'light', 'dark']);
 export type ThemePreference = z.infer<typeof ThemePreferenceSchema>;
@@ -59,6 +62,7 @@ export const OrbitConfigSchema = z.object({
   floatingBallEnabled: z.boolean().default(true),
   floatingBallPosition: FloatingPositionSchema.optional(),
   lastLoginHandle: z.string().optional(),
+  lastSeenAppVersion: z.string().optional(),
   cachedProfile: AuthUserProfileSchema.nullable().optional(),
   docHibernateMinutes: z.number().int().min(3).max(120).default(15),
   developerMode: z.boolean().default(false),
@@ -133,6 +137,60 @@ export interface AccountActionResult {
   ok: boolean;
   cancelled?: boolean;
   auth?: AuthState;
+  message?: string;
+}
+
+export interface SocialConnectionIdentity {
+  userId: string;
+  username: string | null;
+  name: string | null;
+  email: string | null;
+  avatar: string | null;
+  profileUrl: string | null;
+}
+
+export interface SocialConnectionItem {
+  connectorId: string;
+  target: string;
+  name: string;
+  linked: boolean;
+  identity: SocialConnectionIdentity | null;
+}
+
+export interface SocialConnectionsResult {
+  ok: boolean;
+  items: SocialConnectionItem[];
+  message?: string;
+}
+
+export interface StudioMemberSocialSummary {
+  github: {
+    username: string | null;
+    name: string | null;
+    avatar: string | null;
+    profileUrl: string | null;
+  } | null;
+  feishu: {
+    name: string | null;
+    enName: string | null;
+    avatar: string | null;
+    linked: boolean;
+  } | null;
+}
+
+export interface StudioMemberCard {
+  id: string;
+  username: string | null;
+  name: string | null;
+  avatar: string | null;
+  enrollYear: number | null;
+  roles: string[];
+  social: StudioMemberSocialSummary;
+}
+
+export interface StudioMembersResult {
+  ok: boolean;
+  items: StudioMemberCard[];
   message?: string;
 }
 
@@ -232,6 +290,7 @@ export interface UpdateCheckResult {
   latestVersion?: string;
   releaseUrl?: string;
   releaseNotes?: string;
+  changelog?: UpdateChangelog;
   publishedAt?: string;
   assetName?: string;
   assetUrl?: string;
@@ -299,6 +358,8 @@ export interface OrbitBridge {
     pickAndUploadAvatar: () => Promise<AccountActionResult>;
     updateAvatarUrl: (input: UpdateAvatarUrlInput) => Promise<AccountActionResult>;
     changePassword: (input: ChangePasswordInput) => Promise<AccountActionResult>;
+    getSocialConnections: () => Promise<SocialConnectionsResult>;
+    listStudioMembers: () => Promise<StudioMembersResult>;
     signOut: () => Promise<AuthState>;
     onStateChanged: (listener: (state: AuthState) => void) => () => void;
   };
@@ -348,6 +409,7 @@ export interface OrbitBridge {
     checkUpdate: () => Promise<UpdateCheckResult>;
     downloadUpdate: () => Promise<UpdateCheckResult>;
     installUpdate: () => Promise<void>;
+    getVersionChangelog: (version?: string) => Promise<UpdateChangelog | null>;
     onUpdateStateChanged: (listener: (state: UpdateCheckResult) => void) => () => void;
     onCommandPaletteRequested: (listener: () => void) => () => void;
     onQuickPunchRequested: (listener: () => void) => () => void;

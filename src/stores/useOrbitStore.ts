@@ -9,6 +9,7 @@ import {
   type DocViewState,
   type OrbitConfig,
   type OrbitConfigPatch,
+  type StudioMemberCard,
   type UpdateCheckResult,
 } from '@shared/ipc';
 import { parseBlogUrl } from '@shared/blogUrl';
@@ -93,6 +94,11 @@ interface OrbitStoreState {
   notifications: PunchNotificationItem[];
   myTitles: MyTitlesView | null;
 
+  /** LecSSO 工作室成员公开名片目录（跨工作室动态与今日在岗弹窗共享） */
+  studioMembers: StudioMemberCard[];
+  studioMembersLoading: boolean;
+  studioMembersError: string | null;
+
   /** Orbit Go 后端实时公告（含 IM 已读回执）与跨应用通知总线 */
   orbitServerOnline: boolean;
   orbitAnnouncements: OrbitAnnouncement[];
@@ -135,6 +141,7 @@ interface OrbitStoreState {
   refreshDocRecents: (query?: string) => Promise<void>;
   refreshNetworkStatus: (forceWifiScan?: boolean) => Promise<NetworkPolicyStatus | null>;
   refreshPunchData: (options?: { notifyOnError?: boolean }) => Promise<void>;
+  refreshStudioMembers: (force?: boolean) => Promise<void>;
   refreshCardGame: (options?: { silent?: boolean }) => Promise<void>;
   setCardGame: (game: CardGameView) => void;
   refreshOrbitCenter: () => Promise<void>;
@@ -213,6 +220,9 @@ export const useOrbitStore = create<OrbitStoreState>((set, get) => ({
   teamEvents: [],
   notifications: [],
   myTitles: null,
+  studioMembers: [],
+  studioMembersLoading: false,
+  studioMembersError: null,
   orbitServerOnline: false,
   orbitAnnouncements: [],
   orbitNotifications: [],
@@ -289,6 +299,7 @@ export const useOrbitStore = create<OrbitStoreState>((set, get) => ({
     }
     if (auth.authenticated) {
       void get().refreshPunchData();
+      void get().refreshStudioMembers();
       void get().refreshCardGame({ silent: true });
       void get().refreshOrbitCenter();
     }
@@ -351,6 +362,7 @@ export const useOrbitStore = create<OrbitStoreState>((set, get) => ({
     syncOverlayWithMain(get());
     if (auth.authenticated) {
       void get().refreshPunchData();
+      void get().refreshStudioMembers();
       void get().refreshCardGame({ silent: true });
       void get().refreshOrbitCenter();
       void get().refreshDocRecents();
@@ -368,6 +380,9 @@ export const useOrbitStore = create<OrbitStoreState>((set, get) => ({
         teamEvents: [],
         notifications: [],
         myTitles: null,
+        studioMembers: [],
+        studioMembersLoading: false,
+        studioMembersError: null,
         orbitServerOnline: false,
         orbitAnnouncements: [],
         orbitNotifications: [],
@@ -510,6 +525,23 @@ export const useOrbitStore = create<OrbitStoreState>((set, get) => ({
   refreshDocRecents: async (query) => {
     const docRecents = await getOrbitClient().doc.listRecents(query);
     set({ docRecents });
+  },
+
+  refreshStudioMembers: async (force = false) => {
+    if (!get().auth.authenticated) return;
+    if (get().studioMembersLoading) return;
+    if (!force && get().studioMembers.length > 0) return;
+
+    set({ studioMembersLoading: true, studioMembersError: null });
+    const res = await getOrbitClient().auth.listStudioMembers();
+    if (res.ok) {
+      set({ studioMembers: res.items, studioMembersLoading: false, studioMembersError: null });
+      return;
+    }
+    set({
+      studioMembersLoading: false,
+      studioMembersError: res.message || '加载工作室成员名片失败。',
+    });
   },
 
   refreshNetworkStatus: async (forceWifiScan = false) => {

@@ -311,3 +311,162 @@
   flex-wrap: wrap;
   padding-top: 4px;
 }
+
+.socialHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.socialMessage {
+  margin-bottom: 12px;
+}
+
+.socialList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.socialRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--orbit-border);
+  background: var(--orbit-surface);
+}
+
+.socialLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.socialIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--orbit-surface-strong);
+  border: 1px solid var(--orbit-border);
+  color: var(--orbit-text);
+  flex-shrink: 0;
+}
+
+.socialAvatarWrap {
+  position: relative;
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.socialAvatarImg {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--orbit-border);
+  background: var(--orbit-surface-strong);
+}
+
+.socialCornerBadge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--orbit-surface-strong);
+  border: 1px solid var(--orbit-border);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
+}
+
+.socialIconGithub {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+.socialIconFeishu {
+  background: #ffffff;
+  border-color: rgba(51, 112, 255, 0.22);
+}
+
+.socialInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.socialTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.socialMetaLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.socialPrimaryText {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--orbit-text);
+  word-break: break-all;
+}
+
+.socialProfileLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--orbit-accent, #0a84ff);
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.socialDot {
+  font-size: 12px;
+  color: var(--orbit-text-muted);
+  opacity: 0.7;
+}
+
+.socialSub {
+  font-size: 12px;
+  color: var(--orbit-text-muted);
+  word-break: break-all;
+}
+
+.socialEmpty {
+  padding: 14px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--orbit-border);
+  font-size: 12.5px;
+  color: var(--orbit-text-muted);
+}

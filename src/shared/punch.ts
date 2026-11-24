@@ -112,6 +112,7 @@ export interface MyTitlesView {
 
 export interface TeamActiveMember {
   userId: string;
+  username?: string;
   displayName: string;
   realName?: string;
   nickname?: string;
@@ -147,6 +148,7 @@ export interface MyWeeklyStats {
 
 export interface TeamWeeklyRankingItem {
   userId: string;
+  username?: string;
   displayName: string;
   realName?: string;
   nickname?: string;

@@ -15,7 +15,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { UpdateCheckResult } from '../../src/shared/ipc';
+import type { UpdateChangelog, UpdateCheckResult } from '../../src/shared/ipc';
+import {
+  buildChangelogFromCommits,
+  parseReleaseNotesToChangelog,
+  type RawCommitInput,
+} from '../../src/shared/updateChangelog';
 import {
   buildMacSelfReplaceScript,
   compareSemver,
@@ -43,7 +48,30 @@ interface GitHubReleasePayload {
   prerelease?: boolean;
   html_url?: string;
   published_at?: string;
+  author?: {
+    login?: string;
+    avatar_url?: string;
+  };
   assets?: GitHubAsset[];
+}
+
+interface GitHubComparePayload {
+  html_url?: string;
+  commits?: Array<{
+    sha?: string;
+    html_url?: string;
+    commit?: {
+      message?: string;
+      author?: {
+        name?: string;
+        date?: string;
+      };
+    };
+    author?: {
+      login?: string;
+      avatar_url?: string;
+    } | null;
+  }>;
 }
 
 interface StagedMacUpdate {
@@ -125,6 +153,7 @@ export class OrbitUpdater {
   private installing = false;
   private expectedAssetSha512: string | undefined;
   private stagedMacUpdate: StagedMacUpdate | null = null;
+  private readonly changelogCache = new Map<string, UpdateChangelog>();
   private state: UpdateCheckResult = {
     currentVersion: app.getVersion(),
     available: false,
@@ -262,10 +291,55 @@ export class OrbitUpdater {
     return parseLatestManifestYaml(text, GITHUB_REPO);
   }
 
-  private async fetchReleaseNotesBestEffort(version: string): Promise<string | undefined> {
+  /** 拉取指定版本的结构化更新日志（零限流 CDN 清单 → GitHub Release/Compare API → 开发态本地 Git 兜底）。 */
+  async getVersionChangelog(version?: string, fromVersion?: string): Promise<UpdateChangelog | null> {
+    const cleanVersion = (version || app.getVersion()).trim().replace(/^v/i, '');
+    if (!cleanVersion) return null;
+    const cacheKey = `${cleanVersion}@${fromVersion?.replace(/^v/i, '') ?? ''}`;
+    const cached = this.changelogCache.get(cacheKey);
+    if (cached) return cached;
+
+    const releaseUrl = `https://github.com/${GITHUB_REPO}/releases/tag/v${cleanVersion}`;
+
+    // 1. 优先从 GitHub Releases CDN 下载 CI 生成的 release-changelog.json（零 API 限流）
+    try {
+      const cdnRes = await net.fetch(
+        `https://github.com/${GITHUB_REPO}/releases/download/v${encodeURIComponent(cleanVersion)}/release-changelog.json`,
+        {
+          cache: 'no-store',
+          headers: { 'User-Agent': `Orbit-Desktop/${app.getVersion()}` },
+        },
+      );
+      if (cdnRes.ok) {
+        const parsed = (await cdnRes.json()) as Partial<UpdateChangelog>;
+        if (Array.isArray(parsed.items)) {
+          const result: UpdateChangelog = {
+            version: parsed.version || cleanVersion,
+            previousVersion: parsed.previousVersion || fromVersion?.replace(/^v/i, ''),
+            publishedAt: parsed.publishedAt,
+            releaseUrl: parsed.releaseUrl || releaseUrl,
+            compareUrl: parsed.compareUrl,
+            summary: parsed.summary,
+            rawNotes: parsed.rawNotes,
+            items: parsed.items,
+            contributors: Array.isArray(parsed.contributors) ? parsed.contributors : [],
+          };
+          this.changelogCache.set(cacheKey, result);
+          return result;
+        }
+      }
+    } catch {
+      // 忽略 CDN 缺失，进入回退策略
+    }
+
+    // 2. 回退 GitHub Releases API + Compare API（历史版本无 release-changelog.json 时自动解析 PR/提交与作者）
+    let releaseBody: string | undefined;
+    let publishedAt: string | undefined;
+    let fallbackAuthor: { githubLogin?: string; name?: string; avatar?: string } | undefined;
+    let parsedFromNotes: UpdateChangelog | null = null;
     try {
       const res = await net.fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${encodeURIComponent(version)}`,
+        `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${encodeURIComponent(cleanVersion)}`,
         {
           headers: {
             Accept: 'application/vnd.github+json',
@@ -273,12 +347,153 @@ export class OrbitUpdater {
           },
         },
       );
-      if (!res.ok) return undefined;
-      const data = (await res.json()) as GitHubReleasePayload;
-      return (data.body || '').trim() || undefined;
+      if (res.ok) {
+        const data = (await res.json()) as GitHubReleasePayload;
+        releaseBody = (data.body || '').trim() || undefined;
+        publishedAt = data.published_at || undefined;
+        if (data.author?.login) {
+          fallbackAuthor = {
+            githubLogin: data.author.login,
+            name: data.author.login,
+            avatar: data.author.avatar_url,
+          };
+        }
+        parsedFromNotes = parseReleaseNotesToChangelog({
+          version: cleanVersion,
+          previousVersion: fromVersion,
+          publishedAt,
+          releaseUrl: data.html_url || releaseUrl,
+          rawNotes: releaseBody,
+          fallbackAuthor,
+        });
+      }
     } catch {
-      return undefined;
+      // 忽略网络异常
     }
+
+    const baseVersion = (fromVersion || parsedFromNotes?.previousVersion)?.trim().replace(/^v/i, '');
+    if (baseVersion && baseVersion !== cleanVersion) {
+      try {
+        const cmpRes = await net.fetch(
+          `https://api.github.com/repos/${GITHUB_REPO}/compare/v${encodeURIComponent(baseVersion)}...v${encodeURIComponent(cleanVersion)}`,
+          {
+            headers: {
+              Accept: 'application/vnd.github+json',
+              'User-Agent': `Orbit-Desktop/${app.getVersion()}`,
+            },
+          },
+        );
+        if (cmpRes.ok) {
+          const cmp = (await cmpRes.json()) as GitHubComparePayload;
+          if (Array.isArray(cmp.commits) && cmp.commits.length > 0) {
+            const rawCommits: RawCommitInput[] = cmp.commits.map((c) => ({
+              sha: c.sha,
+              message: c.commit?.message || '',
+              authorName: c.commit?.author?.name || c.author?.login,
+              authorLogin: c.author?.login,
+              authorAvatar: c.author?.avatar_url,
+              committedAt: c.commit?.author?.date,
+              url: c.html_url,
+            }));
+            const built = buildChangelogFromCommits({
+              version: cleanVersion,
+              previousVersion: baseVersion,
+              publishedAt,
+              releaseUrl: parsedFromNotes?.releaseUrl || releaseUrl,
+              compareUrl:
+                cmp.html_url ||
+                `https://github.com/${GITHUB_REPO}/compare/v${baseVersion}...v${cleanVersion}`,
+              rawNotes: releaseBody,
+              commits: rawCommits,
+              fallbackAuthor,
+            });
+            this.changelogCache.set(cacheKey, built);
+            return built;
+          }
+        }
+      } catch {
+        // Compare API 不可用时继续使用 Release Notes 解析结果
+      }
+    }
+
+    if (parsedFromNotes && (parsedFromNotes.items.length > 0 || parsedFromNotes.rawNotes)) {
+      this.changelogCache.set(cacheKey, parsedFromNotes);
+      return parsedFromNotes;
+    }
+
+    // 3. 开发态本地 Git 兜底：方便本地预览当前版本的真实提交与 @成员 映射
+    if (!app.isPackaged) {
+      const localChangelog = await this.buildLocalDevChangelog(cleanVersion, releaseUrl).catch(() => null);
+      if (localChangelog) {
+        this.changelogCache.set(cacheKey, localChangelog);
+        return localChangelog;
+      }
+    }
+
+    return {
+      version: cleanVersion,
+      previousVersion: fromVersion?.replace(/^v/i, ''),
+      releaseUrl,
+      items: [],
+      contributors: [],
+    };
+  }
+
+  private async buildLocalDevChangelog(
+    version: string,
+    releaseUrl: string,
+  ): Promise<UpdateChangelog | null> {
+    const cwd = app.getAppPath();
+    const { stdout: tagOut } = await execFileAsync(
+      'git',
+      ['tag', '--sort=-creatordate', '--list', 'v*'],
+      { cwd, timeout: 4_000 },
+    );
+    const tags = tagOut
+      .split('\n')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const currentTag = `v${version}`;
+    const idx = tags.indexOf(currentTag);
+    const prevTag = idx >= 0 ? tags[idx + 1] : tags[0];
+    const range = idx >= 0 && prevTag ? `${prevTag}..${currentTag}` : prevTag ? `${prevTag}..HEAD` : '-n 8';
+    const logArgs =
+      range === '-n 8'
+        ? ['log', '-n', '8', '--pretty=format:%H%x1f%an%x1f%aI%x1f%B%x1e']
+        : ['log', range, '--pretty=format:%H%x1f%an%x1f%aI%x1f%B%x1e'];
+    const { stdout: logOut } = await execFileAsync('git', logArgs, { cwd, timeout: 4_000 });
+    const records = logOut
+      .split('\x1e')
+      .map((r) => r.trim())
+      .filter(Boolean);
+    if (records.length === 0) return null;
+
+    const commits: RawCommitInput[] = records
+      .map((rec) => {
+        const [sha, authorName, committedAt, message] = rec.split('\x1f');
+        if (!sha || !message) return null;
+        const cleanAuthor = authorName?.trim();
+        const looksLikeGithubLogin = Boolean(cleanAuthor && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(cleanAuthor));
+        return {
+          sha: sha.trim(),
+          authorName: cleanAuthor,
+          authorLogin: looksLikeGithubLogin ? cleanAuthor : undefined,
+          committedAt: committedAt?.trim(),
+          message: message.trim(),
+          url: `https://github.com/${GITHUB_REPO}/commit/${sha.trim()}`,
+        } as RawCommitInput;
+      })
+      .filter((c): c is RawCommitInput => Boolean(c));
+
+    return buildChangelogFromCommits({
+      version,
+      previousVersion: prevTag?.replace(/^v/i, ''),
+      releaseUrl,
+      compareUrl: prevTag
+        ? `https://github.com/${GITHUB_REPO}/compare/${prevTag}...${idx >= 0 ? currentTag : 'HEAD'}`
+        : undefined,
+      commits,
+    });
   }
 
   private async fetchGitHubLatestRelease(): Promise<{ payload: GitHubReleasePayload | null; status: number }> {
@@ -317,13 +532,17 @@ export class OrbitUpdater {
         const canAutoInstall =
           this.supportsNativeAutoInstall() ||
           (preferMacZip && Boolean(asset?.name.toLowerCase().endsWith('.zip')));
-        const releaseNotes = available ? await this.fetchReleaseNotesBestEffort(latestVersion) : undefined;
+        const changelog = available
+          ? (await this.getVersionChangelog(latestVersion, currentVersion)) ?? undefined
+          : undefined;
+        const releaseNotes = changelog?.rawNotes;
         return this.updateState({
           currentVersion,
           latestVersion,
-          releaseUrl: `https://github.com/${GITHUB_REPO}/releases/tag/v${latestVersion}`,
+          releaseUrl: changelog?.releaseUrl || `https://github.com/${GITHUB_REPO}/releases/tag/v${latestVersion}`,
           releaseNotes,
-          publishedAt: manifest.releaseDate,
+          changelog,
+          publishedAt: changelog?.publishedAt || manifest.releaseDate,
           assetName: asset?.name,
           assetUrl: asset?.browser_download_url,
           assetSize: asset?.size,
@@ -344,11 +563,30 @@ export class OrbitUpdater {
         const canAutoInstall =
           this.supportsNativeAutoInstall() ||
           (preferMacZip && Boolean(asset?.name.toLowerCase().endsWith('.zip')));
+        const rawNotes = (gh.body || '').trim() || undefined;
+        const changelog = available
+          ? (await this.getVersionChangelog(latestVersion, currentVersion)) ??
+            parseReleaseNotesToChangelog({
+              version: latestVersion,
+              previousVersion: currentVersion,
+              publishedAt: gh.published_at || undefined,
+              releaseUrl: gh.html_url || LATEST_RELEASE_PAGE,
+              rawNotes,
+              fallbackAuthor: gh.author?.login
+                ? {
+                    githubLogin: gh.author.login,
+                    name: gh.author.login,
+                    avatar: gh.author.avatar_url,
+                  }
+                : undefined,
+            })
+          : undefined;
         return this.updateState({
           currentVersion,
           latestVersion,
           releaseUrl: gh.html_url || LATEST_RELEASE_PAGE,
-          releaseNotes: (gh.body || '').trim() || undefined,
+          releaseNotes: rawNotes,
+          changelog,
           publishedAt: gh.published_at || undefined,
           assetName: asset?.name,
           assetUrl: asset?.browser_download_url,

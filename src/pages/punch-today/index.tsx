@@ -2,13 +2,14 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type MouseEvent as ReactMouseEvent } from 'react';
 import { Avatar, Button, Card, Empty, Statistic, Switch, Tag } from '@lec-space/liquidglass';
 import { Clock3, Flame, RefreshCw, ShieldCheck, Trophy, Users } from '@lec-space/icons';
-import { Award, Wifi } from 'lucide-react';
+import { Award, IdCard, Wifi } from 'lucide-react';
 import {
   formatClockDuration,
   formatReadableDuration,
   getCurrentIsoWeek,
   type TeamActiveMember,
 } from '@shared/punch';
+import { MemberProfileDialog, type MemberProfileSeed } from '@/components/MemberProfileDialog';
 import { TitleBadgeList } from '@/components/TitleBadge';
 import { getOrbitClient } from '@/services/orbitClient';
 import { notifyToast } from '@/services/orbitToast';
@@ -34,6 +35,7 @@ export function PunchTodayPage(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [recheckingEnv, setRecheckingEnv] = useState(false);
   const [selectedMember, setSelectedMember] = useState<TeamActiveMember | null>(null);
+  const [profileSeed, setProfileSeed] = useState<MemberProfileSeed | null>(null);
   const [popoverPos, setPopoverPos] = useState<{ left: number; top: number; placement: 'top' | 'bottom' } | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
@@ -398,8 +400,36 @@ export function PunchTodayPage(): JSX.Element {
               </div>
             )}
           </div>
+
+          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+            <Button
+              variant="glass"
+              size="small"
+              icon={<IdCard size={13} />}
+              onClick={() => {
+                const target = selectedMember;
+                setSelectedMember(null);
+                setPopoverPos(null);
+                setProfileSeed({
+                  id: target.userId,
+                  username: target.username,
+                  displayName: target.displayName,
+                  realName: target.realName,
+                  nickname: target.nickname,
+                  avatar: target.avatar,
+                  teamName: target.teamName,
+                  titles: target.titles,
+                  active: target,
+                });
+              }}
+            >
+              查看个人名片
+            </Button>
+          </div>
         </div>
       )}
+
+      <MemberProfileDialog seed={profileSeed} onClose={() => setProfileSeed(null)} />
     </div>
   );
 }

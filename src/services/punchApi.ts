@@ -371,8 +371,11 @@ export const punchApi = {
       const realName = typeof item.realName === 'string' && item.realName.trim() ? item.realName.trim() : undefined;
       const nickname =
         typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : undefined;
+      const username =
+        typeof item.username === 'string' && item.username.trim() ? item.username.trim() : undefined;
       return {
         userId: String(item.memberKey ?? item.userId ?? ''),
+        username,
         displayName: formatMemberDisplayName({
           realName,
           displayName: nickname,
@@ -445,8 +448,11 @@ export const punchApi = {
       const realName = typeof item.realName === 'string' && item.realName.trim() ? item.realName.trim() : undefined;
       const nickname =
         typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : undefined;
+      const username =
+        typeof item.username === 'string' && item.username.trim() ? item.username.trim() : undefined;
       return {
         userId: String(item.memberKey ?? item.userId ?? idx),
+        username,
         displayName: formatMemberDisplayName({
           realName,
           displayName: nickname,

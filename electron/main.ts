@@ -173,6 +173,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle('orbit:auth:changePassword', (_e, raw) =>
     authService.changePassword(ChangePasswordInputSchema.parse(raw)),
   );
+  ipcMain.handle('orbit:auth:getSocialConnections', () => authService.getSocialConnections());
+  ipcMain.handle('orbit:auth:listStudioMembers', () => authService.listStudioMembers());
   ipcMain.handle('orbit:auth:signOut', async () => {
     const scope = currentScopeKey();
     const state = await authService.signOut();
@@ -296,6 +298,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle('orbit:system:checkUpdate', () => updater.check());
   ipcMain.handle('orbit:system:downloadUpdate', () => updater.download());
   ipcMain.handle('orbit:system:installUpdate', () => updater.installAndRestart());
+  ipcMain.handle('orbit:system:getVersionChangelog', (_e, version?: string) =>
+    updater.getVersionChangelog(version),
+  );
 
   // 来自内嵌 LecDoc 的极简只读桥接事件（同步页面上下文 & 触发原生申请编辑权弹窗）
   ipcMain.on('orbit:doc-bridge:pageContext', (_e, raw) => {

@@ -21,6 +21,10 @@ import type {
   OrbitChallengeDetail,
   PasswordSignInInput,
   SignInStepResult,
+  SocialConnectionItem,
+  SocialConnectionsResult,
+  StudioMemberCard,
+  StudioMembersResult,
 } from '../../src/shared/ipc';
 import type { ConfigStore } from '../storage/configStore';
 import type { SecretStore } from '../storage/secretStore';
@@ -1078,6 +1082,163 @@ export class AuthService {
       return {
         ok: false,
         message: err instanceof Error ? err.message : '修改密码失败，请检查网络连接。',
+      };
+    }
+  }
+
+  /** 查询 LecSSO 当前账号已启用的第三方社交连接器与绑定状态（GitHub / 飞书等）。 */
+  async getSocialConnections(): Promise<SocialConnectionsResult> {
+    const token = await this.getApiToken('orbit');
+    if (!token) {
+      return { ok: false, items: [], message: '登录状态已失效，请重新登录 LecSSO。' };
+    }
+    try {
+      const cfg = getOrbitEndpoints();
+      const res = await fetch(`${cfg.ssoEndpoint}/api/lec/account/me`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+      if (!res.ok) {
+        return {
+          ok: false,
+          items: [],
+          message: await this.extractLogtoErrorMessage(res, '获取第三方账号绑定状态失败'),
+        };
+      }
+      const data = (await res.json()) as { socialConnections?: unknown };
+      const rawItems = Array.isArray(data.socialConnections) ? data.socialConnections : [];
+      const items: SocialConnectionItem[] = rawItems
+        .filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) &&
+            typeof item === 'object' &&
+            typeof (item as Record<string, unknown>).connectorId === 'string' &&
+            typeof (item as Record<string, unknown>).target === 'string',
+        )
+        .map((item) => {
+          const rawIdentity =
+            item.identity && typeof item.identity === 'object'
+              ? (item.identity as Record<string, unknown>)
+              : null;
+          return {
+            connectorId: String(item.connectorId),
+            target: String(item.target),
+            name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : String(item.target),
+            linked: Boolean(item.linked),
+            identity:
+              rawIdentity && typeof rawIdentity.userId === 'string'
+                ? {
+                    userId: rawIdentity.userId,
+                    username: typeof rawIdentity.username === 'string' ? rawIdentity.username : null,
+                    name: typeof rawIdentity.name === 'string' ? rawIdentity.name : null,
+                    email: typeof rawIdentity.email === 'string' ? rawIdentity.email : null,
+                    avatar: typeof rawIdentity.avatar === 'string' ? rawIdentity.avatar : null,
+                    profileUrl:
+                      typeof rawIdentity.profileUrl === 'string' ? rawIdentity.profileUrl : null,
+                  }
+                : null,
+          };
+        });
+
+      return { ok: true, items };
+    } catch (err) {
+      return {
+        ok: false,
+        items: [],
+        message: err instanceof Error ? err.message : '获取第三方账号绑定状态失败，请检查网络连接。',
+      };
+    }
+  }
+
+  /** 查询 lec-studio 工作室全体正式成员公开名片（脱敏，不含学号/手机/邮箱）。 */
+  async listStudioMembers(): Promise<StudioMembersResult> {
+    const token = await this.getApiToken('orbit');
+    if (!token) {
+      return { ok: false, items: [], message: '登录状态已失效，请重新登录 LecSSO。' };
+    }
+    try {
+      const cfg = getOrbitEndpoints();
+      const res = await fetch(`${cfg.ssoEndpoint}/api/lec/studio/members`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+      if (res.status === 404) {
+        return {
+          ok: false,
+          items: [],
+          message: 'LecSSO 服务端成员名片接口正在更新中，稍后点击刷新即可加载完整名片。',
+        };
+      }
+      if (!res.ok) {
+        return {
+          ok: false,
+          items: [],
+          message: await this.extractLogtoErrorMessage(res, '获取工作室成员列表失败'),
+        };
+      }
+      const data = (await res.json()) as { items?: unknown };
+      const rawItems = Array.isArray(data.items) ? data.items : [];
+      const items: StudioMemberCard[] = rawItems
+        .filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === 'object' && typeof (item as Record<string, unknown>).id === 'string',
+        )
+        .map((item) => {
+          const social =
+            item.social && typeof item.social === 'object'
+              ? (item.social as Record<string, unknown>)
+              : {};
+          const rawGh =
+            social.github && typeof social.github === 'object'
+              ? (social.github as Record<string, unknown>)
+              : null;
+          const rawFs =
+            social.feishu && typeof social.feishu === 'object'
+              ? (social.feishu as Record<string, unknown>)
+              : null;
+
+          return {
+            id: String(item.id),
+            username: typeof item.username === 'string' ? item.username : null,
+            name: typeof item.name === 'string' ? item.name : null,
+            avatar: typeof item.avatar === 'string' ? item.avatar : null,
+            enrollYear: typeof item.enrollYear === 'number' ? item.enrollYear : null,
+            roles: Array.isArray(item.roles)
+              ? item.roles.filter((r): r is string => typeof r === 'string')
+              : [],
+            social: {
+              github: rawGh
+                ? {
+                    username: typeof rawGh.username === 'string' ? rawGh.username : null,
+                    name: typeof rawGh.name === 'string' ? rawGh.name : null,
+                    avatar: typeof rawGh.avatar === 'string' ? rawGh.avatar : null,
+                    profileUrl: typeof rawGh.profileUrl === 'string' ? rawGh.profileUrl : null,
+                  }
+                : null,
+              feishu: rawFs
+                ? {
+                    name: typeof rawFs.name === 'string' ? rawFs.name : null,
+                    enName: typeof rawFs.enName === 'string' ? rawFs.enName : null,
+                    avatar: typeof rawFs.avatar === 'string' ? rawFs.avatar : null,
+                    linked: Boolean(rawFs.linked),
+                  }
+                : null,
+            },
+          };
+        });
+
+      return { ok: true, items };
+    } catch (err) {
+      return {
+        ok: false,
+        items: [],
+        message: err instanceof Error ? err.message : '获取工作室成员列表失败，请检查网络连接。',
       };
     }
   }

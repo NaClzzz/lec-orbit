@@ -44,6 +44,8 @@ const bridge: OrbitBridge = {
       ipcRenderer.invoke('orbit:auth:updateAvatarUrl', input),
     changePassword: (input: ChangePasswordInput) =>
       ipcRenderer.invoke('orbit:auth:changePassword', input),
+    getSocialConnections: () => ipcRenderer.invoke('orbit:auth:getSocialConnections'),
+    listStudioMembers: () => ipcRenderer.invoke('orbit:auth:listStudioMembers'),
     signOut: () => ipcRenderer.invoke('orbit:auth:signOut'),
     onStateChanged: (listener) => {
       const wrapped = (_event: Electron.IpcRendererEvent, state: AuthState) => listener(state);
@@ -118,6 +120,8 @@ const bridge: OrbitBridge = {
     checkUpdate: () => ipcRenderer.invoke('orbit:system:checkUpdate'),
     downloadUpdate: () => ipcRenderer.invoke('orbit:system:downloadUpdate'),
     installUpdate: () => ipcRenderer.invoke('orbit:system:installUpdate'),
+    getVersionChangelog: (version?: string) =>
+      ipcRenderer.invoke('orbit:system:getVersionChangelog', version),
     onUpdateStateChanged: (listener) => {
       const wrapped = (_event: Electron.IpcRendererEvent, state: UpdateCheckResult) =>
         listener(state);
